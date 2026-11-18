@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Stock">
+<meta name="theme-color" content="#0f766e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Stock Saúde</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--tx:#1b2430;--mut:#6b7785;--pri:#0f766e;--alt:#334155;--warn:#b45309;--bad:#b91c1c;--ok:#15803d;--bd:#dde3ea}
+*{box-sizing:border-box}
+body{margin:0;font:18px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--tx)}
+header{background:var(--pri);color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+header h1{margin:0;font-size:20px}
+#who{display:flex;align-items:center;gap:12px;font-size:16px}
+main{max-width:900px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:14px;margin-bottom:12px}
+.mut{color:var(--mut);font-size:15px}
+label{display:block;font-weight:600;margin-bottom:6px}
+input{font:inherit;padding:12px;border:1px solid #c5ced8;border-radius:10px;width:100%;min-height:48px;background:#fff;color:var(--tx)}
+button{font:inherit;font-weight:600;min-height:48px;padding:0 18px;border:0;border-radius:10px;background:var(--pri);color:#fff;cursor:pointer}
+button.alt{background:var(--alt)}
+button.danger{background:var(--bad)}
+button.ghost{background:transparent;border:1px solid #ffffff88;min-height:38px;padding:0 12px}
+button.sm{min-height:38px;padding:0 12px;font-size:15px}
+button.big{flex:1;min-width:220px;min-height:84px;font-size:20px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+button.big small{font-weight:400;font-size:14px;opacity:.85}
+.row{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
+.row.t{margin-top:10px}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.bar h2{margin:0;font-size:22px}
+.chk{display:flex;align-items:center;gap:8px;margin:0;font-weight:500}
+.chk input{width:24px;min-height:24px}
+.item{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.info{flex:1;min-width:200px}
+.act{display:flex;gap:8px;align-items:center}
+.act input{width:90px}
+.tag{display:inline-block;padding:2px 10px;border-radius:99px;font-size:14px;font-weight:600;margin-top:4px}
+.tag.ok{background:#dcfce7;color:var(--ok)}
+.tag.bad{background:#fee2e2;color:var(--bad)}
+.tag.warn{background:#fef3c7;color:var(--warn)}
+.tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.tabs button{background:#e2e8f0;color:var(--tx);flex:1;padding:0 10px}
+.tabs button.on{background:var(--pri);color:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:10px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:16px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--bd);white-space:nowrap}
+th{color:var(--mut);font-size:14px}
+a{color:var(--pri)}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--ok);color:#fff;padding:12px 20px;border-radius:12px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;text-align:center}
+#toast.show{opacity:1}
+#toast.bad{background:var(--bad)}
+</style>
+</head>
+<body>
+<header><h1>Stock de material de saúde</h1><div id="who"></div></header>
+<main id="app"></main>
+<div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let S={nome:'',papel:null,tab:'produtos',soFalta:false,inst:null};
+try{S.nome=localStorage.getItem('nome')||''}catch(e){}
+
+/* ================= base de dados local (IndexedDB) ================= */
+let _db=null;
+function db(){
+  if(!_db)_db=new Promise((ok,ko)=>{
+    if(!window.indexedDB){ko(new Error('Este browser não suporta armazenamento local'));return}
+    const r=indexedDB.open('stock-saude',1);
+    r.onupgradeneeded=()=>{const d=r.result;
+      d.createObjectStore('produtos',{keyPath:'id',autoIncrement:true});
+      d.createObjectStore('movimentos',{keyPath:'id',autoIncrement:true});
+      d.createObjectStore('encomendas',{keyPath:'id',autoIncrement:true});};
+    r.onsuccess=()=>ok(r.result);
+    r.onerror=()=>{_db=null;ko(new Error('Não foi possível abrir a base de dados do tablet'))};
+  });
+  return _db;
+}
+const rq=r=>new Promise((ok,ko)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>ko(r.error)});
+function run(nomes,modo,fn){
+  return db().then(d=>new Promise((ok,ko)=>{
+    const t=d.transaction(nomes,modo);
+    const s={};nomes.forEach(n=>{s[n]=t.objectStore(n)});
+    let out;
+    t.oncomplete=()=>ok(out);
+    t.onabort=()=>ko(t.error||new Error('Operação cancelada'));
+    Promise.resolve().then(()=>fn(s)).then(r=>{out=r},e=>{ko(e);try{t.abort()}catch(_){}});
+  }));
+}
+
+/* ================= regras ================= */
+const p2=n=>String(n).padStart(2,'0');
+const agora=()=>{const d=new Date();return `${p2(d.getDate())}/${p2(d.getMonth()+1)}/${d.getFullYear()} ${p2(d.getHours())}:${p2(d.getMinutes())}`};
+function inteiro(v,nome,min=1){
+  const t=String(v==null?'':v).trim(),n=Number(t);
+  if(t===''||!Number.isInteger(n))throw new Error(nome+' inválida');
+  if(n<min)throw new Error(`${nome} tem de ser pelo menos ${min}`);
+  return n;
+}
+function texto(v,nome){v=typeof v==='string'?v.trim():'';if(!v)throw new Error(nome+' é obrigatório');return v.slice(0,80)}
+const emFalta=p=>Math.max(p.qtd_alvo-p.qtd_atual,0);
+async function produtoOuErro(s,id){const p=await rq(s.produtos.get(id));if(!p)throw new Error('Produto não encontrado');return p}
+
+async function getProdutos(){
+  const ps=await run(['produtos'],'readonly',s=>rq(s.produtos.getAll()));
+  return ps.sort((a,b)=>a.nome.localeCompare(b.nome,'pt',{sensitivity:'base'}));
+}
+async function getMovimentos(todos){
+  const ms=await run(['movimentos'],'readonly',s=>rq(s.movimentos.getAll()));
+  ms.sort((a,b)=>b.id-a.id);return todos?ms:ms.slice(0,300);
+}
+async function getEncomendas(todas){
+  const es=await run(['encomendas'],'readonly',s=>rq(s.encomendas.getAll()));
+  es.sort((a,b)=>((b.estado==='pendente')-(a.estado==='pendente'))||(b.id-a.id));return todas?es:es.slice(0,300);
+}
+async function repor(pid,q,pessoa){
+  pid=Number(pid);q=inteiro(q,'Quantidade');pessoa=texto(pessoa,'O nome');
+  await run(['produtos','movimentos'],'readwrite',async s=>{
+    const p=await produtoOuErro(s,pid);p.qtd_atual+=q;await rq(s.produtos.put(p));
+    await rq(s.movimentos.add({produto_id:pid,produto:p.nome,tipo:'entrada',quantidade:q,pessoa,data:agora()}));
+  });
+}
+async function saida(pid,q,pessoa){
+  pid=Number(pid);q=inteiro(q,'Quantidade');pessoa=texto(pessoa,'O nome');
+  await run(['produtos','movimentos'],'readwrite',async s=>{
+    const p=await produtoOuErro(s,pid);
+    if(q>p.qtd_atual)throw new Error(`Stock insuficiente (há ${p.qtd_atual})`);
+    p.qtd_atual-=q;await rq(s.produtos.put(p));
+    await rq(s.movimentos.add({produto_id:pid,produto:p.nome,tipo:'saida',quantidade:q,pessoa,data:agora()}));
+  });
+}
+async function novoProduto(nome,alvo,atual){
+  nome=texto(nome,'O nome do produto');alvo=inteiro(alvo,'Quantidade alvo',0);atual=inteiro(atual,'Quantidade atual',0);
+  await run(['produtos'],'readwrite',async s=>{
+    const todos=await rq(s.produtos.getAll());
+    if(todos.some(p=>p.nome.toLowerCase()===nome.toLowerCase()))throw new Error('Já existe um produto com esse nome');
+    await rq(s.produtos.add({nome,qtd_atual:atual,qtd_alvo:alvo}));
+  });
+}
+async function mudarAlvoDB(id,alvo){
+  id=Number(id);alvo=inteiro(alvo,'Quantidade alvo',0);
+  await run(['produtos'],'readwrite',async s=>{const p=await produtoOuErro(s,id);p.qtd_alvo=alvo;await rq(s.produtos.put(p))});
+}
+async function encomendarDB(pid,q,pessoa){
+  pid=Number(pid);q=inteiro(q,'Quantidade');pessoa=texto(pessoa,'O nome');
+  await run(['produtos','encomendas'],'readwrite',async s=>{
+    const p=await produtoOuErro(s,pid);
+    await rq(s.encomendas.add({produto_id:pid,produto:p.nome,quantidade:q,estado:'pendente',criada_por:pessoa,data:agora(),data_rececao:null,recebida_por:null}));
+  });
+}
+async function receberDB(id,pessoa){
+  id=Number(id);pessoa=texto(pessoa,'O nome');
+  await run(['produtos','movimentos','encomendas'],'readwrite',async s=>{
+    const e=await rq(s.encomendas.get(id));
+    if(!e)throw new Error('Encomenda não encontrada');
+    if(e.estado!=='pendente')throw new Error('Esta encomenda já foi recebida');
+    const p=await produtoOuErro(s,e.produto_id),ts=agora();
+    e.estado='recebida';e.data_rececao=ts;e.recebida_por=pessoa;await rq(s.encomendas.put(e));
+    p.qtd_atual+=e.quantidade;await rq(s.produtos.put(p));
+    await rq(s.movimentos.add({produto_id:p.id,produto:p.nome,tipo:'entrada',quantidade:e.quantidade,pessoa,data:ts}));
+  });
+}
+async function carregarExemplos(){
+  await run(['produtos'],'readwrite',async s=>{
+    if((await rq(s.produtos.count()))>0)throw new Error('Já existem produtos');
+    for(const [nome,a,t] of [['Luvas de nitrilo M (caixa)',3,10],['Máscaras cirúrgicas (caixa)',8,10],['Compressas esterilizadas 10x10',20,50],['Seringas 5 ml',100,100],['Álcool 70% (500 ml)',2,6],['Pensos rápidos (caixa)',1,5]])
+      await rq(s.produtos.add({nome,qtd_atual:a,qtd_alvo:t}));
+  });
+}
+async function apagarTudoDB(){
+  await run(['produtos','movimentos','encomendas'],'readwrite',async s=>{for(const n of ['produtos','movimentos','encomendas'])await rq(s[n].clear())});
+}
+
+/* ================= exportar / backup ================= */
+function csv(linhas){
+  return '﻿'+linhas.map(l=>l.map(v=>{
+    v=v==null?'':String(v);
+    if(/^[=+\-@]/.test(v))v="'"+v;
+    return /[";\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;
+  }).join(';')).join('\r\n');
+}
+function baixar(nome,conteudo,tipo){
+  const b=new Blob([conteudo],{type:tipo}),a=document.createElement('a');
+  a.href=URL.createObjectURL(b);a.download=nome;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);
+}
+const hoje=()=>{const d=new Date();return `${d.getFullYear()}-${p2(d.getMonth()+1)}-${p2(d.getDate())}`};
+async function exportar(que){
+  const T='text/csv;charset=utf-8';
+  if(que==='produtos'){
+    const ps=await getProdutos();
+    baixar(`produtos-${hoje()}.csv`,csv([['Produto','Em stock','Alvo','Em falta'],...ps.map(p=>[p.nome,p.qtd_atual,p.qtd_alvo,emFalta(p)])]),T);
+  }else if(que==='movimentos'){
+    const ms=await getMovimentos(true);
+    baixar(`movimentos-${hoje()}.csv`,csv([['Data','Produto','Tipo','Quantidade','Quem'],...ms.map(m=>[m.data,m.produto,m.tipo==='entrada'?'Entrada':'Saída',m.quantidade,m.pessoa])]),T);
+  }else if(que==='encomendas'){
+    const es=await getEncomendas(true);
+    baixar(`encomendas-${hoje()}.csv`,csv([['Data','Produto','Quantidade','Estado','Criada por','Data receção','Recebida por'],...es.map(e=>[e.data,e.produto,e.quantidade,e.estado==='pendente'?'Pendente':'Recebida',e.criada_por,e.data_rececao,e.recebida_por])]),T);
+  }else{
+    const [produtos,movimentos,encomendas]=await Promise.all([getProdutos(),getMovimentos(true),getEncomendas(true)]);
+    baixar(`backup-stock-${hoje()}.json`,JSON.stringify({versao:1,exportado:new Date().toISOString(),produtos,movimentos,encomendas}),'application/json');
+  }
+}
+function validarBackup(d){
+  const ok=d&&Array.isArray(d.produtos)&&Array.isArray(d.movimentos)&&Array.isArray(d.encomendas)
+    &&d.produtos.every(p=>p&&typeof p.nome==='string'&&Number.isInteger(p.qtd_atual)&&Number.isInteger(p.qtd_alvo))
+    &&d.movimentos.every(m=>m&&Number.isInteger(m.produto_id)&&(m.tipo==='entrada'||m.tipo==='saida')&&Number.isInteger(m.quantidade))
+    &&d.encomendas.every(e=>e&&Number.isInteger(e.produto_id)&&Number.isInteger(e.quantidade)&&(e.estado==='pendente'||e.estado==='recebida'));
+  if(!ok)throw new Error('Ficheiro de backup inválido');
+}
+async function restaurarDB(file){
+  let d;try{d=JSON.parse(await file.text())}catch(e){throw new Error('Ficheiro de backup inválido')}
+  validarBackup(d);
+  await run(['produtos','movimentos','encomendas'],'readwrite',async s=>{
+    for(const n of ['produtos','movimentos','encomendas']){await rq(s[n].clear());for(const r of d[n])await rq(s[n].put(r))}
+  });
+}
+
+/* ================= interface ================= */
+function toast(msg,bad){
+  const t=$('#toast');t.textContent=msg;t.className='show'+(bad?' bad':'');
+  clearTimeout(toast.t);toast.t=setTimeout(()=>{t.className=''},2600);
+}
+let busy=false;
+async function act(fn,okmsg){
+  if(busy)return;busy=true;
+  try{await fn();if(okmsg)toast(okmsg);await render()}catch(e){toast(e.message,true)}finally{busy=false}
+}
+
+function home(){
+  $('#app').innerHTML=`<div class="card">
+    <label for="nome">O teu nome (obrigatório)</label>
+    <input id="nome" value="${esc(S.nome)}" placeholder="Nome" autocomplete="name">
+    <div class="row">
+      <button class="big" onclick="entrar('user')">Utilizador<small>Repor stock</small></button>
+      <button class="big alt" onclick="entrar('admin')">Administrador<small>Movimentos e encomendas</small></button>
+    </div></div>`+
+  (S.inst?`<div class="card item"><div class="info"><b>Instalar no tablet</b><div class="mut">Fica com ícone e abre sem rede.</div></div><button onclick="instalar()">Instalar</button></div>`:'');
+}
+function entrar(p){
+  const n=$('#nome').value.trim();
+  if(!n){toast('Indica o teu nome para continuar',true);$('#nome').focus();return}
+  S.nome=n;try{localStorage.setItem('nome',n)}catch(e){}
+  S.papel=p;render();
+}
+function sair(){S.papel=null;render()}
+async function instalar(){
+  if(!S.inst)return;S.inst.prompt();
+  try{await S.inst.userChoice}catch(e){}
+  S.inst=null;render();
+}
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();S.inst=e;if(!S.papel)render()});
+window.addEventListener('appinstalled',()=>{S.inst=null;if(!S.papel)render()});
+
+async function utilizador(){
+  const ps=await getProdutos();
+  const lista=S.soFalta?ps.filter(p=>emFalta(p)>0):ps;
+  $('#app').innerHTML=`<div class="bar"><h2>Repor stock</h2>
+    <label class="chk"><input type="checkbox" ${S.soFalta?'checked':''} onchange="S.soFalta=this.checked;render()"> Só o que falta</label></div>`+
+  (lista.length?lista.map(p=>`<div class="card item">
+    <div class="info"><b>${esc(p.nome)}</b>
+      <div class="mut">Em stock ${p.qtd_atual} · Alvo ${p.qtd_alvo}</div>
+      ${emFalta(p)>0?`<span class="tag bad">Necessário: ${emFalta(p)}</span>`:'<span class="tag ok">Completo</span>'}</div>
+    <div class="act"><input type="number" inputmode="numeric" min="1" id="q${p.id}" placeholder="Qtd">
+      <button onclick="reporUI(${p.id})">Repor</button></div></div>`).join('')
+  :`<div class="card mut">${ps.length?'Nada para repor.':'Ainda não há produtos. Pede ao administrador para os adicionar.'}</div>`);
+}
+function reporUI(id){const q=$('#q'+id).value;act(()=>repor(id,q,S.nome),'Reposição registada')}
+
+async function tabProdutos(){
+  const ps=await getProdutos();
+  return `<div class="card"><b>Novo produto</b><div class="grid">
+    <input id="np-nome" placeholder="Nome do produto">
+    <input id="np-alvo" type="number" inputmode="numeric" min="0" placeholder="Quantidade alvo">
+    <input id="np-atual" type="number" inputmode="numeric" min="0" placeholder="Em stock agora">
+    <button onclick="novoProdutoUI()">Adicionar</button></div></div>`+
+  (ps.length?ps.map(p=>`<div class="card item"><div class="info"><b>${esc(p.nome)}</b>
+    <div class="mut">Em stock ${p.qtd_atual} · Alvo ${p.qtd_alvo} · <a href="#" onclick="mudarAlvo(${p.id},${p.qtd_alvo});return false">alterar alvo</a></div>
+    ${emFalta(p)>0?`<span class="tag bad">Falta ${emFalta(p)}</span>`:'<span class="tag ok">Completo</span>'}</div>
+    <div class="act"><input type="number" inputmode="numeric" min="1" id="q${p.id}" placeholder="Qtd">
+      <button class="alt" onclick="saidaUI(${p.id})">Saída</button>
+      <button onclick="encomendarUI(${p.id})">Encomendar</button></div></div>`).join(''):'<div class="card mut">Ainda não há produtos. Adiciona o primeiro acima.</div>');
+}
+function novoProdutoUI(){
+  act(()=>novoProduto($('#np-nome').value,$('#np-alvo').value||0,$('#np-atual').value||0),'Produto adicionado');
+}
+function mudarAlvo(id,atual){
+  const v=prompt('Nova quantidade alvo:',atual);if(v===null)return;
+  act(()=>mudarAlvoDB(id,v),'Alvo atualizado');
+}
+function saidaUI(id){const q=$('#q'+id).value;act(()=>saida(id,q,S.nome),'Saída registada')}
+function encomendarUI(id){const q=$('#q'+id).value;act(()=>encomendarDB(id,q,S.nome),'Encomenda criada')}
+function receberUI(id){act(()=>receberDB(id,S.nome),'Recebida. Stock atualizado')}
+
+async function tabMovimentos(){
+  const ms=await getMovimentos();
+  if(!ms.length)return '<div class="card mut">Ainda sem movimentos.</div>';
+  return `<div class="card scroll"><table><thead><tr><th>Data</th><th>Produto</th><th>Tipo</th><th>Qtd</th><th>Quem</th></tr></thead><tbody>`+
+  ms.map(m=>`<tr><td>${esc(m.data)}</td><td>${esc(m.produto)}</td><td><span class="tag ${m.tipo==='entrada'?'ok':'warn'}">${m.tipo==='entrada'?'Entrada':'Saída'}</span></td><td>${m.quantidade}</td><td>${esc(m.pessoa)}</td></tr>`).join('')+
+  `</tbody></table></div>`;
+}
+async function tabEncomendas(){
+  const es=await getEncomendas();
+  if(!es.length)return '<div class="card mut">Ainda sem encomendas. Cria uma no separador Produtos.</div>';
+  return `<div class="card scroll"><table><thead><tr><th>Data</th><th>Produto</th><th>Qtd</th><th>Estado</th><th>Criada por</th><th></th></tr></thead><tbody>`+
+  es.map(e=>`<tr><td>${esc(e.data)}</td><td>${esc(e.produto)}</td><td>${e.quantidade}</td><td><span class="tag ${e.estado==='pendente'?'warn':'ok'}">${e.estado==='pendente'?'Pendente':'Recebida'}</span></td><td>${esc(e.criada_por)}</td><td>${e.estado==='pendente'?`<button class="sm" onclick="receberUI(${e.id})">Marcar recebida</button>`:esc(e.data_rececao||'')}</td></tr>`).join('')+
+  `</tbody></table></div>`;
+}
+async function tabDados(){
+  let prot='desconhecido';
+  try{if(navigator.storage&&navigator.storage.persisted)prot=(await navigator.storage.persisted())?'sim':'não'}catch(e){}
+  const vazio=(await getProdutos()).length===0;
+  return `<div class="card"><b>Exportar (cópia de segurança)</b>
+    <div class="mut">Os dados estão só neste tablet. Guarda cópias de vez em quando.</div>
+    <div class="row t">
+      <button class="sm" onclick="exp('produtos')">Produtos (Excel)</button>
+      <button class="sm" onclick="exp('movimentos')">Movimentos (Excel)</button>
+      <button class="sm" onclick="exp('encomendas')">Encomendas (Excel)</button>
+      <button class="sm alt" onclick="exp('backup')">Backup completo</button></div></div>
+  <div class="card"><b>Restaurar backup</b>
+    <div class="mut">Substitui todos os dados atuais pelos do ficheiro de backup.</div>
+    <div class="row t"><input type="file" id="bk" accept=".json,application/json"><button class="sm" onclick="restaurar()">Restaurar</button></div></div>
+  <div class="card"><b>Armazenamento</b>
+    <div class="mut">Protegido contra limpeza automática: ${prot}</div>
+    <div class="row t">${vazio?'<button class="sm" onclick="exemplos()">Carregar produtos de exemplo</button>':''}
+    <button class="sm danger" onclick="apagarTudo()">Apagar todos os dados</button></div></div>`;
+}
+function exp(q){act(()=>exportar(q),'Ficheiro guardado nas Transferências')}
+function exemplos(){act(carregarExemplos,'Produtos de exemplo carregados')}
+function restaurar(){
+  const f=$('#bk').files[0];
+  if(!f){toast('Escolhe primeiro o ficheiro de backup',true);return}
+  if(!confirm('Isto substitui TODOS os dados atuais pelos do backup. Continuar?'))return;
+  act(()=>restaurarDB(f),'Backup restaurado');
+}
+function apagarTudo(){
+  if(!confirm('Apagar TODOS os produtos, movimentos e encomendas deste tablet?'))return;
+  if(!confirm('Tens a certeza? Não dá para desfazer (a não ser com um backup).'))return;
+  act(apagarTudoDB,'Dados apagados');
+}
+async function admin(){
+  const nomes={produtos:'Produtos',movimentos:'Movimentos',encomendas:'Encomendas',dados:'Dados'};
+  let html=`<div class="tabs">${Object.keys(nomes).map(t=>`<button class="${S.tab===t?'on':''}" onclick="S.tab='${t}';render()">${nomes[t]}</button>`).join('')}</div>`;
+  if(S.tab==='produtos')html+=await tabProdutos();
+  else if(S.tab==='movimentos')html+=await tabMovimentos();
+  else if(S.tab==='encomendas')html+=await tabEncomendas();
+  else html+=await tabDados();
+  $('#app').innerHTML=html;
+}
+
+async function render(){
+  $('#who').innerHTML=S.papel?`<span>${esc(S.nome)} · ${S.papel==='admin'?'Administrador':'Utilizador'}</span><button class="ghost" onclick="sair()">Sair</button>`:'';
+  if(!S.papel)return home();
+  try{S.papel==='admin'?await admin():await utilizador()}
+  catch(e){$('#app').innerHTML=`<div class="card"><b>${esc(e.message)}</b><div class="row"><button onclick="render()">Tentar de novo</button></div></div>`}
+}
+render();
+
+if('serviceWorker' in navigator){window.addEventListener('load',()=>{navigator.serviceWorker.register('./sw.js').catch(()=>{})})}
+if(navigator.storage&&navigator.storage.persist){navigator.storage.persist().catch(()=>{})}
+</script>
+</body>
+</html>
